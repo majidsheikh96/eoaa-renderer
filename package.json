@@ -1,0 +1,11 @@
+{
+  "name": "eoaa-renderer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "GitHub Actions renderer for English Out & About — syncs a HyperFrames composition from R2, renders to MP4, uploads back to R2.",
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "render": "node render.js"
+  }
+}

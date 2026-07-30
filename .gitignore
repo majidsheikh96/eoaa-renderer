@@ -1,0 +1,7 @@
+node_modules/
+composition/
+output.mp4
+output_with_cover.mp4
+thumbnail.jpg
+*.log
+.DS_Store

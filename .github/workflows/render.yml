@@ -1,0 +1,77 @@
+name: Render Video
+run-name: "Render: ${{ inputs.video_title || inputs.video_id }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_id:
+        description: 'Episode ID / slug (R2 prefix under episodes/<id>/)'
+        required: true
+        type: string
+      quality:
+        description: 'Render quality'
+        required: false
+        type: choice
+        default: 'standard'
+        options:
+          - standard
+          - draft
+      thumbnail_url:
+        description: 'Public URL of thumbnail JPEG to embed as cover (optional)'
+        required: false
+        type: string
+      video_title:
+        description: 'Human-readable title (for the run name only)'
+        required: false
+        type: string
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    env:
+      VIDEO_ID: ${{ inputs.video_id }}
+      RENDER_QUALITY: ${{ inputs.quality }}
+      THUMBNAIL_URL: ${{ inputs.thumbnail_url }}
+      # R2 config
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+      R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
+      # AWS-compatible creds for the R2 (S3) endpoint
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install system dependencies (Chrome libs + FFmpeg)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+            libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+            libxrandr2 libgbm1 libasound2t64 \
+            ffmpeg
+
+      - name: Run renderer
+        run: node render.js
+
+      - name: Upload MP4 as workflow artifact (backup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-${{ inputs.video_id }}
+          path: output.mp4
+          if-no-files-found: ignore
+          retention-days: 14
