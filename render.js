@@ -88,7 +88,9 @@ async function main() {
   try {
     run(renderCmd, {
       PRODUCER_ENABLE_CHUNKED_ENCODE: "true",
-      FFMPEG_ENCODE_TIMEOUT_MS: "0",
+      // Must be a finite number >= 1 (newer hyperframes rejects 0). Generous ceiling
+      // so long full-length episodes aren't cut off mid-encode.
+      FFMPEG_ENCODE_TIMEOUT_MS: "3600000",
     });
   } catch (err) {
     throw new Error(`Render failed with exit code ${err.status}: ${err.message}`);
