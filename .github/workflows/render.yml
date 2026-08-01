@@ -1,5 +1,5 @@
 name: Render Video
-run-name: "Render: ${{ inputs.video_title || inputs.video_id }}"
+run-name: "Render: ${{ inputs.video_title || inputs.video_id }}${{ inputs.chunks != '' && ' (chunked)' || '' }}"
 
 on:
   workflow_dispatch:
@@ -7,6 +7,11 @@ on:
       video_id:
         description: 'Episode ID / slug (R2 prefix under episodes/<id>/)'
         required: true
+        type: string
+      chunks:
+        description: 'JSON array of chunk indices for parallel render, e.g. [0,1,2,3]. Empty = single full render.'
+        required: false
+        default: ''
         type: string
       quality:
         description: 'Render quality'
@@ -25,49 +30,102 @@ on:
         required: false
         type: string
 
+# Shared R2 / S3 credentials for every job.
+env:
+  R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+  R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+  R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: auto
+
 jobs:
-  render:
+  # ── Legacy: one job renders the whole episode (used when `chunks` is empty; shorts). ──
+  full:
+    if: ${{ inputs.chunks == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
-
     env:
+      MODE: full
       VIDEO_ID: ${{ inputs.video_id }}
       RENDER_QUALITY: ${{ inputs.quality }}
       THUMBNAIL_URL: ${{ inputs.thumbnail_url }}
-      # R2 config
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-      R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-      R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
-      # AWS-compatible creds for the R2 (S3) endpoint
-      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      AWS_DEFAULT_REGION: auto
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
-
-      - name: Install dependencies
-        run: npm install
-
+      - run: npm install
       - name: Install system dependencies (Chrome libs + FFmpeg)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
             libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
-            libxrandr2 libgbm1 libasound2t64 \
-            ffmpeg
+            libxrandr2 libgbm1 libasound2t64 ffmpeg
+      - name: Run renderer (full)
+        run: node render.js
+      - name: Upload MP4 artifact (backup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-${{ inputs.video_id }}
+          path: output.mp4
+          if-no-files-found: ignore
+          retention-days: 14
 
-      - name: Run renderer
+  # ── Chunked: render each chunk in parallel, then concat. ──
+  render_chunks:
+    if: ${{ inputs.chunks != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: ${{ fromJSON(inputs.chunks != '' && inputs.chunks || '[]') }}
+    env:
+      MODE: chunk
+      VIDEO_ID: ${{ inputs.video_id }}
+      CHUNK_ID: ${{ matrix.chunk }}
+      RENDER_QUALITY: ${{ inputs.quality }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Install system dependencies (Chrome libs + FFmpeg)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+            libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+            libxrandr2 libgbm1 libasound2t64 ffmpeg
+      - name: Run renderer (chunk ${{ matrix.chunk }})
         run: node render.js
 
-      - name: Upload MP4 as workflow artifact (backup)
+  concat:
+    if: ${{ inputs.chunks != '' }}
+    needs: render_chunks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MODE: concat
+      VIDEO_ID: ${{ inputs.video_id }}
+      THUMBNAIL_URL: ${{ inputs.thumbnail_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+      - name: Run renderer (concat)
+        run: node render.js
+      - name: Upload final MP4 artifact (backup)
         if: always()
         uses: actions/upload-artifact@v4
         with:
