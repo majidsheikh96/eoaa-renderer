@@ -65,12 +65,15 @@ jobs:
             libxrandr2 libgbm1 libasound2t64 ffmpeg
       - name: Run renderer (full)
         run: node render.js
+      - name: Name the MP4 after the episode
+        if: always()
+        run: '[ -f output.mp4 ] && cp output.mp4 "${{ inputs.video_id }}.mp4" || true'
       - name: Upload MP4 artifact (backup)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: video-${{ inputs.video_id }}
-          path: output.mp4
+          name: ${{ inputs.video_id }}
+          path: ${{ inputs.video_id }}.mp4
           if-no-files-found: ignore
           retention-days: 14
 
@@ -125,11 +128,14 @@ jobs:
           sudo apt-get install -y -qq ffmpeg
       - name: Run renderer (concat)
         run: node render.js
+      - name: Name the MP4 after the episode
+        if: always()
+        run: '[ -f output.mp4 ] && cp output.mp4 "${{ inputs.video_id }}.mp4" || true'
       - name: Upload final MP4 artifact (backup)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: video-${{ inputs.video_id }}
-          path: output.mp4
+          name: ${{ inputs.video_id }}
+          path: ${{ inputs.video_id }}.mp4
           if-no-files-found: ignore
           retention-days: 14
