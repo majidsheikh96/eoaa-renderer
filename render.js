@@ -1,10 +1,16 @@
 import { execSync } from "child_process";
-import { mkdirSync, writeFileSync, existsSync, statSync, readdirSync } from "fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync, readdirSync, unlinkSync } from "fs";
 
 /**
  * English Out & About — GitHub Actions Renderer
  * =============================================
- * Three modes (env MODE, default "full"):
+ * Four modes (env MODE, default "full"):
+ *
+ *   prepare — download the b-roll. Read episodes/<id>/broll-links.json (written by
+ *            build_broll.py, which only records Pexels CDN links — no local download), fetch
+ *            each clip once, dense-keyframe re-encode it (seek-safe for chunk boundaries), and
+ *            upload to episodes/<id>/assets/videos/broll/. Runs BEFORE full/chunk so the sync
+ *            picks the clips up. Idempotent (skips clips already in R2).
  *
  *   full   — legacy single render. Sync episodes/<id>/ → ./composition, render the whole
  *            index.html, (optional thumbnail cover), upload rendered/<id>/video.mp4.
@@ -195,11 +201,61 @@ async function modeConcat(id) {
   console.log(`\n== DONE ==\nMP4: ${url}`);
 }
 
+// ── prepare (fetch b-roll links → dense re-encode → R2) ─────────────────────
+function s3Exists(key) {
+  try {
+    return capture(`aws s3 ls "s3://${BUCKET()}/${key}" --endpoint-url "${ENDPOINT()}"`).trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function modePrepare(id) {
+  const linksKey = `episodes/${id}/broll-links.json`;
+  if (!s3Exists(linksKey)) {
+    console.log(`[prepare] no ${linksKey} in R2 — nothing to prepare (episode has no link-based b-roll). Skipping.`);
+    return;
+  }
+  console.log(`[prepare] Fetching broll-links.json for ${id} ...`);
+  mkdirSync("./broll", { recursive: true });
+  run(
+    `aws s3 cp "s3://${BUCKET()}/${linksKey}" ./broll-links.json ` +
+      `--endpoint-url "${ENDPOINT()}" --only-show-errors`,
+    S3_ENV,
+  );
+  const links = JSON.parse(readFileSync("./broll-links.json", "utf-8"));
+  const entries = Object.entries(links);
+  console.log(`[prepare] ${entries.length} unique clips to fetch (CDN downloads — not Pexels API calls).`);
+  let done = 0, skipped = 0;
+  for (const [relpath, info] of entries) {
+    const key = `episodes/${id}/${relpath}`;
+    if (s3Exists(key)) { skipped++; continue; }              // idempotent
+    const raw = "./broll/raw.mp4", enc = "./broll/enc.mp4";
+    run(`curl -s -L -o ${raw} "${info.link}"`);              // Pexels CDN (no API rate-limit)
+    // dense-keyframe 30fps, audio stripped → chunk-boundary seeks (data-media-start) are exact
+    run(
+      `ffmpeg -y -i ${raw} -an -c:v libx264 -r 30 -g 30 -keyint_min 30 ` +
+        `-sc_threshold 0 -pix_fmt yuv420p -movflags +faststart ${enc} -loglevel error`,
+    );
+    run(
+      `aws s3 cp ${enc} "s3://${BUCKET()}/${key}" ` +
+        `--endpoint-url "${ENDPOINT()}" --content-type video/mp4 --only-show-errors`,
+      S3_ENV,
+    );
+    unlinkSync(raw);
+    unlinkSync(enc);
+    done++;
+    console.log(`  ↑ ${relpath} (${done + skipped}/${entries.length})`);
+  }
+  console.log(`\n== PREPARE DONE ==\n${done} uploaded, ${skipped} already present.`);
+}
+
 async function main() {
   validateEnv();
   const id = process.env.VIDEO_ID;
   const mode = process.env.MODE || "full";
   console.log(`Mode: ${mode} | video_id: ${id}`);
+  if (mode === "prepare") return modePrepare(id);
   if (mode === "chunk") return modeChunk(id);
   if (mode === "concat") return modeConcat(id);
   return modeFull(id);
