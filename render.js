@@ -79,6 +79,10 @@ function render(compositionDir, outFile) {
     run(cmd, {
       PRODUCER_ENABLE_CHUNKED_ENCODE: "true",
       FFMPEG_ENCODE_TIMEOUT_MS: "3600000",
+      // Sub-second b-roll cuts (e.g. a 0.52s clip → 15/16 frames at 30fps) trip the
+      // default 0.95 video-coverage gate even though the clip renders fine. Relax to
+      // 0.9 (still a real floor against genuinely blank clips).
+      HF_VIDEO_COVERAGE_THRESHOLD: "0.9",
     });
   } catch (err) {
     throw new Error(`Render failed with exit code ${err.status}: ${err.message}`);
