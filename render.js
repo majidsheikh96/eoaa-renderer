@@ -73,7 +73,7 @@ function qualityFlags() {
 function render(compositionDir, outFile) {
   const cmd =
     `npx --yes hyperframes render ${compositionDir} --output ${outFile} ` +
-    `${qualityFlags()} --workers auto --browser-timeout 18000`;
+    `${qualityFlags()} --workers auto --browser-timeout 18000 --sdr`;
   console.log(`Rendering ${compositionDir} (quality: ${process.env.RENDER_QUALITY || "standard"}) ...`);
   try {
     run(cmd, {
